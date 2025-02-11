@@ -8,43 +8,41 @@ library(fixest)
 library(ggplot2)
 library("openxlsx")
 
+# SOCDS total permits by county
 selectVars <- c("GEOID","STATE","COUNTY",paste("ALL_PERMITS_",1980:2022,sep=""))                                  
-df <- fread("docs/data/usprice/Residential_Construction_Permits_By_County.csv",select=selectVars)
-print(summary(df))
-# STATE COUNTY
+df <- fread("data/raw/Residential_Construction_Permits_by_County_5026727375813176131.csv",select=selectVars)
 
-# county to metro
-#dm <- data.table(read.xlsx("docs/data/usprice/list1_2023.xlsx",startRow=3))
-#dm <- dm[,.(Metropolitan.Division.Code,Metropolitan.Division.Title,CSA.Code,CBSA.Title,FIPS.State.Code,FIPS.County.Code)]
-dm <- fread("docs/data/usprice/geocorr2022countyCBSA.csv",skip=1,select=c("County code","Core-based statistical area code","Metropolitan division code"))
-print(summary(dm))
-du <- fread("docs/data/usprice/cbsaUnits.csv")
-print(du)
-print(nrow(dm))
-dm <- merge(dm,du,by.x="Core-based statistical area code",by.y="cbsa20",all.x=TRUE)
-print(nrow(dm))
-
+# county to CBSA 2022
+dm <- fread("data/raw/geocorr2022countyCBSA.csv",skip=1,select=c("County code","Core-based statistical area code","Metropolitan division code"))
 df[,countyCode:=STATE*1000+COUNTY]
 df <- merge(df,dm,by.x="countyCode",by.y="County code",all.x=TRUE)
 df[,isDivision:=(`Metropolitan division code`<99999)]
 df[,metroFHFA:=isDivision*`Metropolitan division code`+(1-isDivision)*`Core-based statistical area code`]
 
-dp <- unique(df[,.(metroFHFA=metroFHFA,cbsa=`Core-based statistical area code`,u80)])
-for (v in paste("ALL_PERMITS_",1980:2022,sep="")) {
-	print(v)
-	newdata <- df[,(sum(get(v),na.rm=TRUE)),by=metroFHFA]
+# get annual permits by metro
+dp <- unique(df[,.(metroFHFA=metroFHFA,cbsa=`Core-based statistical area code`,STATE)])
+dp[,sumNA:=0]
+dp[,lastNA:=0]
+for (y in 1980:2022) {
+	v <- paste("ALL_PERMITS_",y,sep="")
+	newdata <- df[,.(sum(get(v),na.rm=TRUE),sum(is.na(get(v)))),by=metroFHFA]
 	setnames(newdata,old="V1",new=v)
-	print(newdata)
+	setnames(newdata,old="V2",new="thisNA")
 	dp <- merge(dp,newdata,by="metroFHFA")
+	dp[,sumNA:=sumNA+thisNA]
+	# drop the NA variable
+	dp[thisNA>0,lastNA:=y]
+	dp[,thisNA:=NULL]
+	print(dp)
 }
-print(summary(dp))
-dp <- melt(dp,id.vars=c("metroFHFA","u80"),variable.name="year",value.name="ALL_PERMITS_")
+dp <- melt(dp,id.vars=c("metroFHFA","STATE"),variable.name="year",value.name="ALL_PERMITS_")
 # rename year only from form ALL_PERMITS_1980 to 1980
 dp[,year:=as.numeric(substr(year,13,16))]
 
-hpi <- fread("docs/williams/data/HPI_AT_metro_2024.csv",header=FALSE,na.strings=c("-"))
+# real HPI
+hpi <- fread("data/raw/hpi_at_metro.csv",header=FALSE,na.strings=c("-"))
 names(hpi) <- c("cbsaNAME","metroFHFA","year","quarter","hpi","zz")
-cpi <- fread("docs/data/usprice/CPIAUCNS.csv") # seasonally adjusted
+cpi <- fread("data/raw/CPIAUCNS.csv") # from FRED
 cpi[,quarter:=quarter(cpi$DATE)]
 cpi[,year:=year(cpi$DATE)]
 cpi <- cpi[,.(cpi=mean(CPIAUCNS)),by=.(year,quarter)]
@@ -57,8 +55,46 @@ print(summary(hpi))
 
 dp <- unique(dp)
 dp <- merge(dp,hpi,by=c("metroFHFA","year"))
-print(dp)
-print(unique(dp$CBSA.Title))
+
+dp[,hpiMaxRatio:=NULL]
+dp[,hpiMax:=1]
+for (y in 1983:2022) {
+	print(y)
+	dp[,tempvar:=max(hpi*(year<y),na.rm=TRUE),by=metroFHFA]
+	dp[year==y,hpiMax:=max(tempvar,na.rm=TRUE),by=metroFHFA]
+	dp[year==y,hpiMaxRatio:=hpi/hpiMax]
+}
+
+
+print(summary(feols(log(ALL_PERMITS_)~log(hpi)+i(year)|metroFHFA,data=dp[year>1983])))
+print(summary(feols(log(ALL_PERMITS_)~i(year)|metroFHFA[log(hpi)],data=dp[year>1983])))
+print(summary(feols(log(ALL_PERMITS_)~log(hpi)+log(hpiMax)+i(year)|metroFHFA,data=dp[year>1983])))
+print(summary(feols(log(ALL_PERMITS_)~log(hpiMaxRatio)+i(year)|metroFHFA,data=dp[year>1983])))
+print(summary(feols(log(ALL_PERMITS_)~i(year)|metroFHFA[log(hpiMaxRatio)],data=dp[year>1983])))
+# not sand
+print(summary(feols(log(ALL_PERMITS_)~log(hpi)+i(year)|metroFHFA,data=dp[year>1983 & STATE!=4 & STATE!=6 & STATE!=12 & STATE!=32])))
+
+
+dfdfddf
+
+
+
+# housing units 1980
+d80 <- fread("data/raw/nhgis0069_csv/nhgis0069_ds104_1980_county.csv",select=c("STATEA","COUNTYA","C8Y001"))
+d80[,county80:=STATEA*1000+COUNTYA]
+d80[,STATEA:=NULL]
+d80[,COUNTYA:=NULL]
+d80 <- merge(d80,dm,by.x="county80",by.y="County code",all.x=TRUE)
+d80[,isDivision:=(`Metropolitan division code`<99999)]
+d80[,metroFHFA:=isDivision*`Metropolitan division code`+(1-isDivision)*`Core-based statistical area code`]
+d80 <- unique(d80[,.(units1980=sum(C8Y001,na.rm=TRUE)),by=metroFHFA])
+# metro FHFA units in 1980
+# merge with permits
+d80 <- merge(dp,d80,by="metroFHFA",all.x=TRUE) # permits and units for plotting
+dg1 <- d80[,.(hpi83 = max(hpi*(year==1983),na.rm=TRUE),hpi90 = max(hpi*(year==1990),na.rm=TRUE),units1980,permits=sum(ALL_PERMITS_*(year>1982) *(year<2000))),by=metroFHFA]
+print(dg1)
+dfdfdf
+
 
 dp[,hpi1983:=max(hpi*(year==1983),na.rm=TRUE),by=metroFHFA]
 dp[,hpi1990:=max(hpi*(year==1990),na.rm=TRUE),by=metroFHFA]
