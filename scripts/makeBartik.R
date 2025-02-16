@@ -11,25 +11,33 @@ dm[,metroFHFA:=ifelse(`Metropolitan division code`==99999,`Core-based statistica
 setnames(dm,"County code","area_fips")
 dm <- dm[metroFHFA!=99999,.(area_fips,metroFHFA)]
 
-# start with 1990 base
-df <- fread("data/raw/cew_1990.csv")
-df[,area_fips:=as.numeric(area_fips)]
-df <- merge(df,dm,by="area_fips")
-df <- df[,agglvl_code:=77]
-db <- df[,.(employment=sum(annual_avg_emplvl)),by=c("year","metroFHFA","industry_code")]
-print(db)
-db[,employmentTotal:=sum(employment),by=.(year,metroFHFA)]
-db[,bartikWeight:=employment/employmentTotal]
-
-# now get growth 1991-2023 based on US growth times weights
-for (y in 1991:2023) {
-    print(y)
-    df <- fread(paste0("data/raw/cew_", y, ".csv"),select=c("area_fips","industry_code","agglvl_code","annual_avg_emplvl"))
-    df <- df[agglvl_code==17 & area_fips=="US000"]
+dx <- data.table(year = numeric(),bartikGrow=numeric(),metroFHFA=numeric())
+for (y in 1990:2023) { #start with 1990 base
+    df <- fread(paste("data/raw/cew_",as.character(y),".csv",sep=""),select=c("area_fips","industry_code","agglvl_code","annual_avg_emplvl","own_code"))
+    dfu <- df[,.(sum(annual_avg_emplvl)),by="industry_code"]
+    setnames(dfu,"V1",paste("employmentNational",y,sep=""))
+    if (nrow(den)<10) {
+        den <- dfu
+    }
+    else {
+        den <- merge(den,dfu,by="industry_code")
+    }
     df[,area_fips:=as.numeric(area_fips)]
     df <- merge(df,dm,by="area_fips")
     df <- df[,agglvl_code:=77]
-    db <- rbind(db,df[,.(employment=sum(annual_avg_emplvl)),by=c("year","metroFHFA","industry_code")])
-    db[,employmentTotal:=sum(employment),by=.(year,metroFHFA)]
+    print(table(df[,own_code]))
+    db <- df[,.(employment=sum(annual_avg_emplvl)),by=c("metroFHFA","industry_code")]
+    print(db)
+    db[,employmentTotal:=sum(employment),by=.(metroFHFA)]
     db[,bartikWeight:=employment/employmentTotal]
+    db$employment <- db$employmentTotal <- NULL
+    db <- merge(db,den,by="industry_code")
+    print(summary(db))
+    if (y>1990) {
+        db[,grow:=get(paste("employmentNational",y,sep=""))/get(paste("employmentNational",y-1,sep=""))]
+        print(round(c(y,mean(db$grow),cor(db[,.(grow,bartikWeight)])),2))
+        metroGrow <- db[,.(year=y,bartikGrow=sum(bartikWeight*grow)),by="metroFHFA"]
+        dx <- rbind(dx,metroGrow)
+    }
 }
+print(dx)
