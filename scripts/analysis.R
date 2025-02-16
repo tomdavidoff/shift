@@ -28,7 +28,9 @@ print(dp)
 # metro division to cbsa
 dm <- fread("data/raw/geocorr2022countyCBSA.csv",skip=1,select=c("Core-based statistical area code","Metropolitan division code"))
 dm <- unique(dm)
-names(dm) <- c("CBSA","metroFHFA")
+dm[,metroFHFA:=ifelse(`Metropolitan division code`==99999,`Core-based statistical area code`,`Metropolitan division code`)]
+setnames(dm,c("Core-based statistical area code"),c("CBSA"))
+dm[,`Metropolitan division code`:=NULL]
 
 # real HPI
 hpi <- fread("data/raw/hpi_at_metro.csv",header=FALSE,na.strings=c("-"))
@@ -69,6 +71,19 @@ dp[,growPermits:=log(ALL_PERMITS_/shift(ALL_PERMITS_,1)),by=CBSA]
 
 print(summary(feols(log(growPermits)~growHPI+i(year)|CBSA,data=dp[year>1983])))
 print(summary(feols(log(growPermits)~growHPI+log(hpiMaxRatio) + i(year)|CBSA,data=dp[year>1983])))
+
+# instrument with Bartik stuff
+bartik <- fread("data/derived/bartikGrow.csv")
+dp <- merge(dp,bartik,by=c("CBSA","year"))
+print(cor(dp[,.(bartikGrow,growHPI,growPermits)]))
+print(feols(growHPI~bartikGrow|CBSA+year,data=dp))
+print(feols(growPermits~bartikGrow|CBSA+year,data=dp))
+print(feols(growPermits~bartikGrow|CBSA+year,data=dp[year<2010]))
+print(feols(growPermits~bartikGrow|CBSA+year,data=dp[year>2010]))
+print("high then low")
+print(feols(growPermits~bartikGrow|CBSA+year,data=dp[year>2010 & hpiMaxRatio>1]))
+print(feols(growPermits~bartikGrow|CBSA+year,data=dp[year>2010 & hpiMaxRatio<.95]))
+print(feols(growPermits~bartikGrow|CBSA+year,data=dp[ hpiMaxRatio<.95]))
 
 dfdfddf
 
